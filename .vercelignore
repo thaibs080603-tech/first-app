@@ -1,0 +1,15 @@
+# Don't deploy server socket files to Vercel
+server/
+.azure/
+deploy.sh
+web.config
+RAILWAY_DEPLOYMENT.md
+railway.json
+
+# Local env files
+.env
+.env.production
+
+# Other
+node_modules/
+.next/
