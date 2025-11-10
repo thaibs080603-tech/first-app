@@ -1,0 +1,244 @@
+'use client';
+
+import React, { useEffect, useRef, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+import styles from './chat.module.css';
+
+interface Message {
+  id: number;
+  content: string;
+  sender: string;
+  room: string;
+  createdAt: string;
+  clientId?: string;
+}
+
+export default function Chat() {
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [message, setMessage] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [room, setRoom] = useState('general');
+  const [isConnected, setIsConnected] = useState(false);
+
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  // connect to socket AFTER user logs in (username set)
+  useEffect(() => {
+    if (!username) return;
+
+    let cancelled = false;
+    let socketInstance: Socket | null = null;
+
+    (async () => {
+      try {
+        const r = await fetch('/api/auth/socket-token');
+        if (!r.ok) throw new Error('no token');
+        const data = await r.json();
+        const token = data.token;
+
+        socketInstance = io('http://localhost:3001', {
+          path: '/api/socket',
+          transports: ['websocket'],
+          auth: { token },
+        });
+
+        socketInstance.on('connect', () => {
+          console.log('Socket connected');
+          setIsConnected(true);
+          // join room immediately and load messages
+          socketInstance?.emit('join-room', room);
+          fetch(`/api/messages?room=${encodeURIComponent(room)}`)
+            .then((res) => res.json())
+            .then((data: Message[]) => setMessages(data))
+            .catch((e) => console.error('Failed to load messages', e));
+        });
+
+        socketInstance.on('disconnect', () => {
+          console.log('Socket disconnected');
+          setIsConnected(false);
+        });
+
+        socketInstance.on('new-message', (newMessage: Message) => {
+          if (newMessage.clientId) {
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.clientId === newMessage.clientId);
+              if (idx !== -1) {
+                const copy = [...prev];
+                copy[idx] = newMessage;
+                return copy;
+              }
+              return [...prev, newMessage];
+            });
+          } else {
+            setMessages((prev) => [...prev, newMessage]);
+          }
+        });
+
+        setSocket(socketInstance);
+      } catch (err) {
+        console.error('Failed to connect socket', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (socketInstance) socketInstance.disconnect();
+    };
+  }, [username]);
+
+  // auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (!messagesRef.current) return;
+    messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [messages]);
+
+  const handleRegister = async () => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // auto login after register
+        await handleLogin();
+      } else {
+        alert(data.error || 'Register failed');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Register error');
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.username) {
+        // username is returned; cookie set by server
+        setUsername(data.username);
+      } else {
+        alert(data.error || 'Login failed');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Login error');
+    }
+  };
+
+  const joinRoom = () => {
+    if (socket && username) {
+      socket.emit('join-room', room);
+      fetch(`/api/messages?room=${encodeURIComponent(room)}`)
+        .then((r) => r.json())
+        .then((data: Message[]) => setMessages(data))
+        .catch((e) => console.error('Failed to load messages', e));
+    }
+  };
+
+  const loadMore = async () => {
+    if (messages.length === 0) return;
+    const first = messages[0];
+    const before = encodeURIComponent(first.createdAt);
+    try {
+      const r = await fetch(`/api/messages?room=${encodeURIComponent(room)}&before=${before}&limit=50`);
+      if (!r.ok) throw new Error('failed');
+      const older: Message[] = await r.json();
+      setMessages((prev) => [...older, ...prev]);
+    } catch (err) {
+      console.error('loadMore failed', err);
+    }
+  };
+
+  const sendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (socket && message && username) {
+      const clientId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+      socket.emit('send-message', {
+        content: message,
+        sender: username,
+        room,
+        clientId,
+      });
+      const optimistic: Message = {
+        id: Date.now(),
+        content: message,
+        sender: username,
+        room,
+        createdAt: new Date().toISOString(),
+        clientId,
+      };
+      setMessages((prev) => [...prev, optimistic]);
+      setMessage('');
+    }
+  };
+
+  if (!username) {
+    // show login / register UI
+    return (
+      <div className={styles.container}>
+        <div className={styles.usernameForm}>
+          <h3>{authMode === 'login' ? 'Login' : 'Register'}</h3>
+          <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className={styles.input} />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className={styles.input} />
+          {authMode === 'login' ? (
+            <>
+              <button onClick={handleLogin} className={styles.button}>Login</button>
+              <p>
+                Don't have an account? <button onClick={() => setAuthMode('register')} className={styles.button}>Register</button>
+              </p>
+            </>
+          ) : (
+            <>
+              <button onClick={handleRegister} className={styles.button}>Register</button>
+              <p>
+                Already have an account? <button onClick={() => setAuthMode('login')} className={styles.button}>Login</button>
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.chatContainer}>
+        <div className={styles.header}>
+          <h2>Chat Room: {room}</h2>
+          <select value={room} onChange={(e) => setRoom(e.target.value)} className={styles.select}>
+            <option value="general">General</option>
+            <option value="random">Random</option>
+            <option value="support">Support</option>
+          </select>
+        </div>
+
+        <div style={{ padding: 8 }}>
+          <button onClick={loadMore} className={styles.button}>Load more</button>
+        </div>
+
+        <div className={styles.messages} ref={messagesRef}>
+          {messages.map((msg) => (
+            <div key={msg.id} className={`${styles.message} ${msg.sender === username ? styles.ownMessage : ''}`}>
+              <strong>{msg.sender}:</strong> {msg.content}
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={sendMessage} className={styles.inputForm}>
+          <input type="text" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type your message..." className={styles.messageInput} />
+          <button type="submit" className={styles.button}>Send</button>
+        </form>
+      </div>
+    </div>
+  );
+}
