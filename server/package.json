@@ -1,0 +1,13 @@
+{
+  "name": "first-app-socket-server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node socket-server.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.15.3"
+  }
+}

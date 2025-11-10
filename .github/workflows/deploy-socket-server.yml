@@ -1,0 +1,49 @@
+name: Deploy Socket Server to Azure Web App
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'server/**'
+      - 'prisma/**'
+      - 'package.json'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=prisma/schema.prisma
+
+      - name: Prepare server deployment package
+        run: |
+          rm -rf server-deploy || true
+          mkdir server-deploy
+          # copy server sources
+          cp -r server/* server-deploy/
+          # copy node_modules required by server (prisma client, jwt, mysql2)
+          cp -r node_modules server-deploy/
+          # copy package.json (server package.json will be used)
+          cp server/package.json server-deploy/package.json
+
+      - name: Zip server package
+        run: |
+          cd server-deploy
+          zip -r ../server-deploy.zip .
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
+          package: server-deploy.zip
